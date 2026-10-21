@@ -25,6 +25,7 @@
  ******************************************************************************/
 package org.eclipse.californium.core.network.stack;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.util.concurrent.ScheduledFuture;
@@ -52,7 +53,9 @@ public abstract class BlockwiseStatus {
 	private final int contentFormat;
 
 	protected boolean randomAccess;
-	protected final ByteBuffer buf;
+	protected final ByteArrayOutputStream buffer;
+	protected byte[] finalBuffer;
+	private final int maxSize;
 	protected Exchange exchange;
 	protected EndpointContext followUpEndpointContext;
 
@@ -70,23 +73,24 @@ public abstract class BlockwiseStatus {
 	 * @param contentFormat The Content-Format of the body.
 	 */
 	protected BlockwiseStatus(final int maxSize, final int contentFormat) {
-		this.buf = ByteBuffer.allocate(maxSize);
+		this.maxSize = maxSize;
+		LOGGER.debug("WWW Creating ByteArrayOutputStream of size: {}", maxSize);
+		this.buffer = new ByteArrayOutputStream(maxSize);
 		this.contentFormat = contentFormat;
 	}
 
 	/**
 	 * Creates a new blockwise status.
-	 * <p>
-	 * This constructor also sets the maximum size of the body to be buffered to 0.
-	 * 
+	 
+	 * @param startSize The start size of the backing buffers.* 
+	 * @param maxSize The maximum size of the body to be buffered.
 	 * @param contentFormat The Content-Format of the body.
-	 * @param num The initial block number.
-	 * @param szx The initial block size code.
 	 */
-	protected BlockwiseStatus(final int contentFormat, final int num, final int szx) {
-		this(0, contentFormat);
-		this.currentNum = num;
-		this.currentSzx = szx;
+	protected BlockwiseStatus(final int startSize, final int maxSize, final int contentFormat) {
+		this.maxSize = maxSize;
+		LOGGER.debug("QQQ Creating ByteArrayOutputStream of start size: {}", startSize);
+		this.buffer = new ByteArrayOutputStream(startSize);
+		this.contentFormat = contentFormat;
 	}
 
 	/**
@@ -194,9 +198,14 @@ public abstract class BlockwiseStatus {
 		boolean result = false;
 		if (block == null) {
 			result = true;
-		} else if (block != null && buf.remaining() >= block.length) {
+		} else if (block != null && (maxSize - buffer.size()) >= block.length) {
 			result = true;
-			buf.put(block);
+			try {
+				buffer.write(block);
+			} catch (Exception e) {
+				LOGGER.error("Failed to write block into buffer, block size: {}, error: {}", block.length, e);
+			}
+			
 		} else {
 			LOGGER.debug("resource body exceeds buffer size [{}]", getBufferSize());
 		}
@@ -210,7 +219,7 @@ public abstract class BlockwiseStatus {
 	 * @return The capacity in bytes.
 	 */
 	public final synchronized int getBufferSize() {
-		return buf.capacity();
+		return maxSize;
 	}
 
 	/**
@@ -231,10 +240,14 @@ public abstract class BlockwiseStatus {
 	 * @return The bytes contained in the buffer.
 	 */
 	final synchronized byte[] getBody() {
-		((Buffer)buf).flip();
-		byte[] body = new byte[buf.remaining()];
-		((Buffer)buf.get(body)).clear();
-		return body;
+		return buffer.toByteArray();
+	}
+
+
+	final synchronized void finalizeBuffer() {
+		if (finalBuffer == null) {
+			finalBuffer = buffer.toByteArray();
+		}
 	}
 
 	/**

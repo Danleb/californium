@@ -45,6 +45,7 @@ import org.eclipse.californium.core.observe.NotificationOrder;
 public final class Block2BlockwiseStatus extends BlockwiseStatus {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(Block2BlockwiseStatus.class);
+	private static final int DefaultStartBufferSize = 16384; // TODO get from config
 
 	/**
 	 * Order for notifications according RFC 7641, 4-4.
@@ -66,6 +67,10 @@ public final class Block2BlockwiseStatus extends BlockwiseStatus {
 		super(bufferSize, contentFormat);
 	}
 
+	private Block2BlockwiseStatus(final int startSize, final int bufferSize, final int contentFormat) {
+		super(startSize, bufferSize, contentFormat);
+	}
+
 	/**
 	 * Creates a new tracker for sending a response.
 	 * 
@@ -82,8 +87,12 @@ public final class Block2BlockwiseStatus extends BlockwiseStatus {
 		status.response = response;
 		status.exchange = exchange;
 		if (response.getPayload() != null) {
-			status.buf.put(response.getPayload());
-			((Buffer)status.buf).flip();
+			try {
+				status.buffer.write(response.getPayload());
+			}
+			catch (Exception e) {
+				LOGGER.error("Failed to write block into buffer, error: {}", e);
+			}
 		}
 		status.setCurrentSzx(determineResponseBlock2Szx(exchange, preferredBlockSize));
 		return status;
@@ -99,11 +108,14 @@ public final class Block2BlockwiseStatus extends BlockwiseStatus {
 	 */
 	public static Block2BlockwiseStatus forInboundResponse(final Exchange exchange, final Response block, final int maxBodySize) {
 		int contentFormat = block.getOptions().getContentFormat();
-		int bufferSize = maxBodySize;
+		int startSize = DefaultStartBufferSize;
+		int maxBufferSize = maxBodySize;
 		if (block.getOptions().hasSize2()) {
-			bufferSize = block.getOptions().getSize2();
+			LOGGER.debug("Size2 value is specified: {}", block.getOptions().hasSize2());
+			maxBufferSize = block.getOptions().getSize2();
+			startSize = maxBufferSize;
 		}
-		Block2BlockwiseStatus status = new Block2BlockwiseStatus(bufferSize, contentFormat);
+		Block2BlockwiseStatus status = new Block2BlockwiseStatus(startSize, maxBufferSize, contentFormat);
 		status.setFirst(block);
 		status.exchange = exchange;
 		Integer observeCount = block.getOptions().getObserve();
@@ -328,12 +340,12 @@ public final class Block2BlockwiseStatus extends BlockwiseStatus {
 		if (0 < bodySize && from < bodySize) {
 			int to = Math.min((getCurrentNum() + 1) * currentSize, bodySize);
 			int length = to - from;
-			byte[] blockPayload = new byte[length];
 			m = to < bodySize;
 
 			// crop payload -- do after calculation of m in case block==response
-			((Buffer)buf).position(from);
-			buf.get(blockPayload, 0, length);
+			finalizeBuffer();
+
+			byte[] blockPayload = Arrays.copyOfRange(finalBuffer, from, from + length);
 			block.setPayload(blockPayload);
 		}
 		setComplete(!m);
